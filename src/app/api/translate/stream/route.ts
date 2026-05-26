@@ -15,6 +15,7 @@
 
 import { NextRequest } from 'next/server';
 import { streamAiTranslation, buildApiUrl, normalizeProtocol } from '@/lib/ai';
+import { getEnvAIConfig, isBuiltinAvailable } from '@/lib/ai/types';
 import { translate } from '@/lib/translator/engine';
 import type { Framework, TranslationAIConfig } from '@/lib/semantic-tree/types';
 
@@ -58,20 +59,27 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 如果不是自定义 AI，回退到普通翻译
-    if (!enableAI || !aiConfig || aiConfig.provider !== 'custom' || !aiConfig.baseUrl || !aiConfig.apiKey || !aiConfig.model) {
+    // 如果不是自定义 AI，检查环境变量配置，否则回退到普通翻译
+    const envConfig = getEnvAIConfig();
+    const effectiveAiConfig = (aiConfig?.provider === 'custom' && aiConfig.baseUrl && aiConfig.apiKey && aiConfig.model)
+      ? aiConfig
+      : envConfig
+        ? { provider: 'custom' as const, apiProtocol: envConfig.apiProtocol, baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model: envConfig.model }
+        : aiConfig;
+
+    if (!enableAI || !effectiveAiConfig || effectiveAiConfig.provider !== 'custom' || !effectiveAiConfig.baseUrl || !effectiveAiConfig.apiKey || !effectiveAiConfig.model) {
       console.log('[FrameShift Stream API] 非自定义 AI，回退到同步翻译');
       const result = await translate({
         sourceCode,
         sourceFramework,
         targetFramework,
         enableAI: enableAI ?? false,
-        aiConfig: aiConfig ? {
-          provider: aiConfig.provider,
-          apiProtocol: aiConfig.apiProtocol,
-          baseUrl: aiConfig.baseUrl,
-          apiKey: aiConfig.apiKey,
-          model: aiConfig.model,
+        aiConfig: effectiveAiConfig ? {
+          provider: effectiveAiConfig.provider,
+          apiProtocol: effectiveAiConfig.apiProtocol,
+          baseUrl: effectiveAiConfig.baseUrl,
+          apiKey: effectiveAiConfig.apiKey,
+          model: effectiveAiConfig.model,
         } : undefined,
       });
       return new Response(JSON.stringify(result), {
@@ -80,8 +88,8 @@ export async function POST(request: NextRequest) {
     }
 
     // 流式 AI 翻译
-    const protocol = normalizeProtocol(aiConfig.apiProtocol);
-    console.log(`[FrameShift Stream API] 流式翻译请求: ${aiConfig.model} @ ${aiConfig.baseUrl} (${protocol} 协议)`);
+    const protocol = normalizeProtocol(effectiveAiConfig.apiProtocol);
+    console.log(`[FrameShift Stream API] 流式翻译请求: ${effectiveAiConfig.model} @ ${effectiveAiConfig.baseUrl} (${protocol} 协议)`);
 
     const encoder = new TextEncoder();
 
@@ -139,7 +147,7 @@ export async function POST(request: NextRequest) {
         (async () => {
           try {
             // 立即发送开始事件，让前端知道流已建立（含协议和实际请求 URL）
-            const actualApiUrl = buildApiUrl(aiConfig.baseUrl, protocol);
+            const actualApiUrl = buildApiUrl(effectiveAiConfig.baseUrl, protocol);
             sendEvent('start', { protocol, requestUrl: actualApiUrl });
 
             // 流式 AI 翻译
@@ -148,11 +156,11 @@ export async function POST(request: NextRequest) {
               sourceFramework,
               targetFramework,
               {
-                provider: aiConfig.provider,
-                apiProtocol: aiConfig.apiProtocol,
-                baseUrl: aiConfig.baseUrl,
-                apiKey: aiConfig.apiKey,
-                model: aiConfig.model,
+                provider: effectiveAiConfig.provider,
+                apiProtocol: effectiveAiConfig.apiProtocol,
+                baseUrl: effectiveAiConfig.baseUrl,
+                apiKey: effectiveAiConfig.apiKey,
+                model: effectiveAiConfig.model,
               },
               async (token) => {
                 // 每收到一个 token，立即发送 SSE 事件

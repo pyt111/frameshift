@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { translate } from '@/lib/translator/engine';
+import { getEnvAIConfig, isBuiltinAvailable } from '@/lib/ai/types';
 import type { Framework, TranslationRequest, TranslationAIConfig } from '@/lib/semantic-tree/types';
 
 export async function POST(request: NextRequest) {
@@ -52,7 +53,18 @@ export async function POST(request: NextRequest) {
       const protocol = aiConfig.apiProtocol || 'openai-completions';
       console.log(`[FrameShift API] 翻译请求使用自定义 AI: ${aiConfig.model} @ ${aiConfig.baseUrl} (${protocol} 协议)`);
     } else if (enableAI) {
-      console.log(`[FrameShift API] 翻译请求使用内置 AI: GLM-4`);
+      // 检查环境变量配置或内置 AI
+      const envConfig = getEnvAIConfig();
+      if (envConfig) {
+        console.log(`[FrameShift API] 翻译请求使用环境变量 AI: ${envConfig.model} @ ${envConfig.baseUrl} (${envConfig.apiProtocol} 协议)`);
+      } else if (isBuiltinAvailable()) {
+        console.log(`[FrameShift API] 翻译请求使用内置 AI: GLM-4`);
+      } else {
+        return NextResponse.json(
+          { error: 'AI 不可用：内置 AI 仅在沙箱环境可用，请在 .env 中配置 AI_PROVIDER=env 及相关变量，或在前端设置中配置自定义 API' },
+          { status: 400 }
+        );
+      }
     } else {
       console.log(`[FrameShift API] 翻译请求: AST 模式（无 AI）`);
     }

@@ -5,6 +5,7 @@
 
 import ZAI from 'z-ai-web-dev-sdk';
 import type { AIApiProtocol, AICustomConfig } from './types';
+import { getEnvAIConfig, isBuiltinAvailable } from './types';
 import { normalizeProtocol, buildApiUrl, extractContentFromAnyFormat, extractTokenFromSSEEvent, isSSEStreamEndEvent, isSSEErrorEvent } from './protocol';
 
 /**
@@ -255,6 +256,30 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
   }
 
   // 测试内置 SDK 连接
+  // 优先检查环境变量配置
+  const envConfig = getEnvAIConfig();
+  if (envConfig) {
+    console.log('[AI Status Test] 使用环境变量配置测试连接');
+    // 使用环境变量配置进行测试（复用自定义逻辑）
+    const testResult = await testAIConnection(envConfig);
+    return {
+      ...testResult,
+      provider: 'env',
+      message: testResult.available
+        ? `环境变量 AI 连接正常 (${envConfig.apiProtocol || 'openai-completions'}, 模型: ${envConfig.model})`
+        : `环境变量 AI 连接失败: ${testResult.message}`,
+    };
+  }
+
+  if (!isBuiltinAvailable()) {
+    return {
+      available: false,
+      model: 'GLM-4',
+      provider: 'builtin',
+      message: '内置 AI 不可用（非沙箱环境）。请在 .env 中配置 AI_PROVIDER=env 及相关变量，或在前端设置中配置自定义 API',
+    };
+  }
+
   try {
     const startTime = Date.now();
     const zai = await ZAI.create();
