@@ -139,6 +139,14 @@ export function TranslationWorkspace({
     && !!settings.aiConfig.baseUrl
     && !!settings.aiConfig.model
 
+  /** 当前结果的生成步骤信息 */
+  const resultGenerateStep = useMemo(
+    () => result?.pipeline?.steps?.find(s => s.id === 'generate'),
+    [result]
+  )
+  const resultGenerateDetail = resultGenerateStep?.detail
+  const isPartialResult = resultGenerateDetail?.partial === true
+
   /** 流式请求的 AbortController 引用 */
   const streamAbortRef = useRef<AbortController | null>(null)
 
@@ -225,6 +233,54 @@ export function TranslationWorkspace({
           let tokenCount = 0
           const streamStartTime = Date.now()
           let streamProtocol = '' // 从 start 事件中记录协议
+          const buildStreamResult = (
+            code: string,
+            options: {
+              confidence: number
+              confidenceLevel: TranslationResult['confidenceLevel']
+              warningMessage: string
+              stepName: string
+              stepDescription: string
+              isPartial?: boolean
+              duration: number
+            }
+          ): TranslationResult => {
+            const aiUnitCount = countTranslationUnits(sourceCode, sourceFramework)
+            return {
+              code,
+              targetFramework,
+              overallConfidence: options.confidence,
+              confidenceLevel: options.confidenceLevel,
+              warnings: [
+                {
+                  id: `ai-stream-${Date.now()}`,
+                  message: options.warningMessage,
+                  confidence: options.confidence,
+                  confidenceLevel: options.confidenceLevel,
+                  warningType: options.isPartial ? 'manual-review' : 'ai-assisted',
+                },
+              ],
+              duration: options.duration,
+              pipeline: {
+                steps: [
+                  {
+                    id: 'generate',
+                    name: options.stepName,
+                    description: options.stepDescription,
+                    status: 'completed' as const,
+                    duration: options.duration,
+                    icon: 'sparkles',
+                    detail: {
+                      mode: 'ai-full',
+                      aiUnitCount: aiUnitCount as number,
+                      partial: !!options.isPartial,
+                    },
+                  },
+                ],
+                totalDuration: options.duration,
+              },
+            }
+          }
 
           try {
             while (!streamDone) {
@@ -272,12 +328,18 @@ export function TranslationWorkspace({
                     // 优先使用后端已提取的代码，回退到前端提取
                     const finalCode = parsed.code || extractCodeBlockFromStream(accumulated, toLang)
 
-                    if (!parsed.success || !finalCode) {
+                    if (!parsed.success || !finalCode?.trim()) {
                       throw new Error(
-                        tokenCount > 0
-                          ? 'AI 翻译未能提取有效代码，请重试'
-                          : 'AI 翻译超时，未返回任何内容，请稍后重试或切换模型'
+                        typeof parsed.message === 'string'
+                          ? parsed.message
+                          : tokenCount > 0
+                            ? 'AI 翻译未能提取有效代码，请重试'
+                            : 'AI 翻译超时，未返回任何内容，请稍后重试或切换模型'
                       )
+                    }
+
+                    if (finalCode.trim().startsWith('[翻译错误:')) {
+                      throw new Error(finalCode.replace(/^\[翻译错误:\s*/, '').replace(/\]$/, ''))
                     }
 
                     // 只在 finalCode 与当前展示不同时才更新（避免双重刷新）
@@ -287,25 +349,16 @@ export function TranslationWorkspace({
 
                     console.log(`[FrameShift] 流式翻译完成，${tokenCount} tokens，${streamDuration}ms`)
 
-                    // 统计 AI 翻译的代码单元数量
-                    const aiUnitCount = countTranslationUnits(sourceCode, sourceFramework)
-
-                    setResult({
-                      code: finalCode,
-                      targetFramework,
-                      overallConfidence: 0.85,
-                      confidenceLevel: 'high' as const,
-                      warnings: [
-                        { id: `ai-stream-${Date.now()}`, message: `代码由 AI 全量翻译生成（${aiUnitCount} 个翻译单元），建议人工审查`, confidence: 0.85, confidenceLevel: 'high' as const, warningType: 'ai-assisted' },
-                      ],
+                    const streamResult = buildStreamResult(finalCode, {
+                      confidence: 0.85,
+                      confidenceLevel: 'high',
+                      warningMessage: `代码由 AI 全量翻译生成（${countTranslationUnits(sourceCode, sourceFramework)} 个翻译单元），建议人工审查`,
+                      stepName: 'AI 流式翻译',
+                      stepDescription: `流式翻译完成${streamProtocol ? ` (${streamProtocol})` : ''}，${tokenCount} tokens`,
                       duration: streamDuration,
-                      pipeline: {
-                        steps: [
-                          { id: 'generate', name: 'AI 流式翻译', description: `流式翻译完成${streamProtocol ? ` (${streamProtocol})` : ''}，${tokenCount} tokens，${aiUnitCount} 个翻译单元`, status: 'completed' as const, duration: streamDuration, icon: 'sparkles', detail: { mode: 'ai-full', aiUnitCount: aiUnitCount as number } },
-                        ],
-                        totalDuration: streamDuration,
-                      },
                     })
+
+                    setResult(streamResult)
                     setTranslationState('success')
 
                     // 保存到翻译历史
@@ -316,8 +369,8 @@ export function TranslationWorkspace({
                         sourceCodePreview: sourceCode.slice(0, 100),
                         sourceCode,
                         translatedCode: finalCode,
-                        confidence: 0.85,
-                        confidenceLevel: 'high',
+                        confidence: streamResult.overallConfidence,
+                        confidenceLevel: streamResult.confidenceLevel,
                       })
                     }
                     streamDone = true
@@ -325,12 +378,11 @@ export function TranslationWorkspace({
                     throw new Error(parsed.message || '流式翻译失败')
                   }
                 } catch (parseError) {
-                  // JSON 解析错误 - 可能是不完整的数据，跳过
-                  // 业务错误（流式翻译失败）需要重新抛出
-                  if (parseError instanceof Error && (parseError.message.includes('翻译失败') || parseError.message.includes('错误'))) {
-                    throw parseError
+                  if (parseError instanceof SyntaxError) {
+                    // JSON 解析错误 - 可能是不完整的数据，跳过
+                    continue
                   }
-                  // 其他 JSON 解析错误忽略
+                  throw parseError
                 }
               }
             }
@@ -343,22 +395,16 @@ export function TranslationWorkspace({
                 const partialCode = extractCodeBlockFromStream(accumulated, toLang)
                 if (partialCode) {
                   setTranslatedCode(partialCode)
-                  setResult({
-                    code: partialCode,
-                    targetFramework,
-                    overallConfidence: 0.6,
-                    confidenceLevel: 'medium' as const,
-                    warnings: [
-                        { id: `ai-abort-${Date.now()}`, message: '翻译被中断，结果可能不完整', confidence: 0.6, confidenceLevel: 'medium' as const, warningType: 'manual-review' },
-                      ],
-                    duration: 0,
-                    pipeline: {
-                      steps: [
-                        { id: 'generate', name: 'AI 流式翻译', description: '翻译被中断', status: 'completed' as const, duration: 0, icon: 'sparkles', detail: { mode: 'ai-full' } },
-                      ],
-                      totalDuration: 0,
-                    },
+                  const partialResult = buildStreamResult(partialCode, {
+                    confidence: 0.6,
+                    confidenceLevel: 'medium',
+                    warningMessage: '翻译被中断，当前仅为部分结果，建议重试或人工审查',
+                    stepName: 'AI 流式翻译（部分结果）',
+                    stepDescription: '翻译被中断，已保留可提取的部分结果',
+                    isPartial: true,
+                    duration: Date.now() - streamStartTime,
                   })
+                  setResult(partialResult)
                   setTranslationState('success')
                   return
                 }
@@ -374,22 +420,16 @@ export function TranslationWorkspace({
             const finalCode = extractCodeBlockFromStream(accumulated, toLang)
             if (finalCode) {
               setTranslatedCode(finalCode)
-              setResult({
-                code: finalCode,
-                targetFramework,
-                overallConfidence: 0.7,
-                confidenceLevel: 'medium' as const,
-                warnings: [
-                    { id: `ai-incomplete-${Date.now()}`, message: '流式连接意外结束，结果可能不完整', confidence: 0.7, confidenceLevel: 'medium' as const, warningType: 'manual-review' },
-                  ],
-                  duration: 0,
-                  pipeline: {
-                    steps: [
-                      { id: 'generate', name: 'AI 流式翻译', description: '流式连接意外结束', status: 'completed' as const, duration: 0, icon: 'sparkles', detail: { mode: 'ai-full' } },
-                    ],
-                    totalDuration: 0,
-                  },
-                })
+              const partialResult = buildStreamResult(finalCode, {
+                confidence: 0.7,
+                confidenceLevel: 'medium',
+                warningMessage: '流式连接意外结束，当前仅为部分结果，建议重试或人工审查',
+                stepName: 'AI 流式翻译（部分结果）',
+                stepDescription: '流式连接意外结束，已保留可提取的部分结果',
+                isPartial: true,
+                duration: Date.now() - streamStartTime,
+              })
+              setResult(partialResult)
               setTranslationState('success')
 
               if (settings.translationAutoSaveHistory) {
@@ -399,8 +439,8 @@ export function TranslationWorkspace({
                   sourceCodePreview: sourceCode.slice(0, 100),
                   sourceCode,
                   translatedCode: finalCode,
-                  confidence: 0.7,
-                  confidenceLevel: 'medium',
+                  confidence: partialResult.overallConfidence,
+                  confidenceLevel: partialResult.confidenceLevel,
                 })
               }
             } else {
@@ -413,9 +453,16 @@ export function TranslationWorkspace({
           }
         } else {
           // 非 SSE 响应（回退到 AST 翻译），按普通 JSON 处理
-          const data: TranslationResult = await response.json()
-          setResult(data)
-          setTranslatedCode(data.code)
+          const data = await response.json() as Partial<TranslationResult> & { error?: string }
+          if (data.error) {
+            throw new Error(data.error)
+          }
+          if (!data.code?.trim()) {
+            throw new Error('翻译接口未返回有效代码，请重试')
+          }
+          const translationResult = data as TranslationResult
+          setResult(translationResult)
+          setTranslatedCode(translationResult.code)
           setTranslationState('success')
 
           if (settings.translationAutoSaveHistory) {
@@ -424,15 +471,12 @@ export function TranslationWorkspace({
               targetFramework,
               sourceCodePreview: sourceCode.slice(0, 100),
               sourceCode,
-              translatedCode: data.code,
-              confidence: data.overallConfidence,
-              confidenceLevel: data.confidenceLevel,
+              translatedCode: translationResult.code,
+              confidence: translationResult.overallConfidence,
+              confidenceLevel: translationResult.confidenceLevel,
             })
           }
         }
-
-        setIsStreaming(false)
-        streamAbortRef.current = null
       } else if (!settings.translationAIAssist && isClientTranslationSupported(sourceFramework)) {
         // ===== 客户端 AST 翻译（无需服务端 API） =====
         // 注意：Vue 3 源代码需要 @vue/compiler-sfc，不支持客户端翻译，需走服务端
@@ -501,13 +545,14 @@ export function TranslationWorkspace({
       // 如果是用户取消的请求，不显示错误
       if (err instanceof DOMException && err.name === 'AbortError') {
         setTranslationState('idle')
-        setIsStreaming(false)
         return
       }
       const msg = err instanceof Error ? err.message : '翻译过程中发生未知错误'
       setErrorMessage(msg)
       setTranslationState('error')
+    } finally {
       setIsStreaming(false)
+      streamAbortRef.current = null
     }
   }, [sourceCode, sourceFramework, targetFramework, settings])
 
@@ -1168,24 +1213,30 @@ export function TranslationWorkspace({
                       <TooltipTrigger asChild>
                         <Badge variant="outline" className={cn(
                           'text-[10px] h-5 gap-1',
-                          result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ai-full'
-                            ? 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/20'
-                            : result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ast-fallback'
+                          isPartialResult
+                            ? 'bg-[#f97316]/10 text-[#f97316] border-[#f97316]/20'
+                            : resultGenerateDetail?.mode === 'ai-full'
+                              ? 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/20'
+                              : resultGenerateDetail?.mode === 'ast-fallback'
                               ? 'bg-[#ef4444]/10 text-[#ef4444] border-[#ef4444]/20'
                               : 'bg-[var(--app-hover-bg)] text-[var(--app-text-muted)] border-[var(--app-border)]',
                         )}>
                           <Sparkles className="h-2.5 w-2.5" />
-                          {result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ai-full'
-                            ? `${settings.aiConfig.model || '自定义AI'} 翻译`
-                            : result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ast-fallback'
+                          {isPartialResult
+                            ? 'AI 部分结果'
+                            : resultGenerateDetail?.mode === 'ai-full'
+                              ? `${settings.aiConfig.model || '自定义AI'} 翻译`
+                              : resultGenerateDetail?.mode === 'ast-fallback'
                               ? 'AI 失败·已回退'
                               : 'AI 翻译'}
                         </Badge>
                       </TooltipTrigger>
                       <TooltipContent side="bottom" className="bg-[var(--app-hover-bg)] text-[var(--app-text)] border-[var(--app-border)] max-w-72">
-                        {result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ai-full'
-                          ? `已使用 ${settings.aiConfig.model || '自定义AI'} 进行全量翻译，翻译质量较高`
-                          : result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ast-fallback'
+                        {isPartialResult
+                          ? '流式翻译未完整结束，当前仅保留部分结果，建议重试或人工审查'
+                          : resultGenerateDetail?.mode === 'ai-full'
+                            ? `已使用 ${settings.aiConfig.model || '自定义AI'} 进行全量翻译，翻译质量较高`
+                            : resultGenerateDetail?.mode === 'ast-fallback'
                             ? 'AI 翻译失败，已自动回退到 AST 管线翻译。部分代码可能缺失，建议检查 API 配置或重试'
                             : '翻译模式信息'}
                       </TooltipContent>
@@ -1274,17 +1325,19 @@ export function TranslationWorkspace({
                             <motion.span
                               initial={{ opacity: 0, x: -4 }}
                               animate={{ opacity: 1, x: 0 }}
-                              className="text-[10px] text-[#22c55e]"
+                              className={cn(
+                                'text-[10px]',
+                                isPartialResult ? 'text-[#f97316]' : 'text-[#22c55e]'
+                              )}
                             >
-                              ✓ 翻译完成
+                              {isPartialResult ? '⚠ 部分结果' : '✓ 翻译完成'}
                             </motion.span>
                             {/* 翻译来源指示器 */}
                             {(() => {
-                              const genStep = result?.pipeline?.steps?.find(s => s.id === 'generate')
-                              const mode = genStep?.detail?.mode
+                              const mode = resultGenerateDetail?.mode
                               const isAI = mode === 'ai-full'
                               const isFallback = mode === 'ast-fallback'
-                              const aiUnitCount = (genStep?.detail?.aiUnitCount as number) ?? 0
+                              const aiUnitCount = (resultGenerateDetail?.aiUnitCount as number) ?? 0
                               const model = settings.aiConfig.model || '自定义AI'
                               return (
                                 <motion.div
@@ -1294,11 +1347,18 @@ export function TranslationWorkspace({
                                 >
                                   <Badge variant="outline" className={cn(
                                     'text-[10px] h-5 gap-1',
-                                    isAI && 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/20',
+                                    isAI && !isPartialResult && 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/20',
+                                    isPartialResult && 'bg-[#f97316]/10 text-[#f97316] border-[#f97316]/20',
                                     isFallback && 'bg-[#ef4444]/10 text-[#ef4444] border-[#ef4444]/20',
                                     !isAI && !isFallback && 'bg-[#8b5cf6]/10 text-[#8b5cf6] border-[#8b5cf6]/20',
                                   )}>
-                                    {isAI ? (
+                                    {isAI && isPartialResult ? (
+                                      <>
+                                        <Sparkles className="h-2.5 w-2.5" />
+                                        <span>AI 部分结果</span>
+                                        {aiUnitCount > 0 && <span className="opacity-70">·{aiUnitCount}单元</span>}
+                                      </>
+                                    ) : isAI ? (
                                       <>
                                         <Sparkles className="h-2.5 w-2.5" />
                                         <span>{model}</span>
