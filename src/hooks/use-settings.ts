@@ -9,7 +9,7 @@ export type EditorTheme = 'vs-dark' | 'vs' | 'hc-black'
 export type AnimationSpeed = 'fast' | 'normal' | 'slow'
 
 /** AI 提供商类型 */
-export type AIProvider = 'builtin' | 'custom'
+export type AIProvider = 'custom'
 
 /** AI API 协议类型 */
 export type AIApiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
@@ -18,6 +18,8 @@ export type AIApiProtocol = 'openai-completions' | 'openai-responses' | 'anthrop
 export interface AIConfig {
   /** AI 提供商 */
   provider: AIProvider
+  /** 预设名称 */
+  presetName: string
   /** API 协议（openai 兼容 / anthropic） */
   apiProtocol: AIApiProtocol
   /** 自定义 API Base URL（如 https://api.openai.com/v1） */
@@ -56,7 +58,8 @@ export interface AppSettings {
 
 /** 默认 AI 配置 */
 export const DEFAULT_AI_CONFIG: AIConfig = {
-  provider: 'builtin',
+  provider: 'custom',
+  presetName: '自定义',
   apiProtocol: 'openai-completions',
   baseUrl: '',
   apiKey: '',
@@ -65,6 +68,7 @@ export const DEFAULT_AI_CONFIG: AIConfig = {
 
 /** 预设 AI 模型 */
 export const AI_PRESETS: { name: string; baseUrl: string; models: string[]; apiProtocol: AIApiProtocol }[] = [
+  { name: '自定义', baseUrl: '', models: [''], apiProtocol: 'openai-completions' },
   { name: 'OpenAI (Chat)', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'], apiProtocol: 'openai-completions' },
   { name: 'OpenAI (Responses)', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'], apiProtocol: 'openai-responses' },
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-coder'], apiProtocol: 'openai-completions' },
@@ -108,6 +112,10 @@ function loadSettings(): AppSettings {
     }
     if (settings.aiConfig?.apiProtocol === 'anthropic') {
       settings.aiConfig.apiProtocol = 'anthropic-messages'
+    }
+    const legacyProvider = settings.aiConfig?.provider as AIProvider | 'builtin' | 'env' | undefined
+    if (legacyProvider === 'builtin' || legacyProvider === 'env') {
+      settings.aiConfig.provider = 'custom'
     }
     return settings
   } catch {

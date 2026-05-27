@@ -364,7 +364,7 @@ export interface TranslationWarning {
 /** AI 配置（从前端传入后端） */
 export interface TranslationAIConfig {
   /** 提供商类型 */
-  provider: 'builtin' | 'custom';
+  provider: 'custom';
   /** API 协议（openai-completions / openai-responses / anthropic-messages） */
   apiProtocol?: 'openai-completions' | 'openai-responses' | 'anthropic-messages';
   /** 自定义 API Base URL */

@@ -67,8 +67,8 @@ export async function translate(request: TranslationRequest): Promise<Translatio
 
   // 日志：显示实际使用的 AI 配置
   if (enableAI) {
-    const aiProvider = customAiConfig?.provider === 'custom' ? `自定义AI (${customAiConfig.model})` : '内置 GLM-4';
-    console.log(`[FrameShift Engine] AI 翻译模式: ${aiProvider}`, customAiConfig?.provider === 'custom' ? `baseUrl: ${customAiConfig.baseUrl}` : '');
+    const aiProvider = customAiConfig?.model ? `自定义AI (${customAiConfig.model})` : '自定义AI';
+    console.log(`[FrameShift Engine] AI 翻译模式: ${aiProvider}`, customAiConfig?.baseUrl ? `baseUrl: ${customAiConfig.baseUrl}` : '');
   }
 
   // 初始化流水线步骤
@@ -223,9 +223,9 @@ export async function translate(request: TranslationRequest): Promise<Translatio
 
         const codeLineCount = generatedCode.split('\n').length;
         const genDuration = Date.now() - genStartTime;
-        const aiProviderInfo = customAiConfig?.provider === 'custom'
+        const aiProviderInfo = customAiConfig
           ? `${customAiConfig.model} @ ${customAiConfig.baseUrl}`
-          : 'GLM-4 (内置)';
+          : '自定义AI';
         completeStep('generate', `AI 全量翻译完成，生成 ${FRAMEWORK_LABELS[targetFramework]} 代码，${codeLineCount} 行，${aiUnitCount} 个翻译单元`, {
           targetFramework,
           lineCount: codeLineCount,

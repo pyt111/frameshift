@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { Sparkles, Loader2, CheckCircle2, XCircle, Eye, EyeOff, Server, Key, Cpu, ChevronDown } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
@@ -17,6 +17,19 @@ interface TranslationSettingsTabProps {
   setSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void
 }
 
+/** 响应格式是否符合当前选择的 API 协议 */
+function isResponseFormatMatched(protocol?: string, responseFormat?: string): boolean {
+  if (!protocol || !responseFormat) return true
+
+  const expectedFormats: Record<string, string[]> = {
+    'openai-completions': ['OpenAI Chat'],
+    'openai-responses': ['OpenAI Responses', 'OpenAI Responses (宽松)'],
+    'anthropic-messages': ['Anthropic', 'Anthropic (宽松)'],
+  }
+
+  return expectedFormats[protocol]?.includes(responseFormat) ?? true
+}
+
 /** 翻译设置标签页内容 */
 export function TranslationSettingsTab({ settings, setSetting }: TranslationSettingsTabProps) {
   /** AI 连接测试状态 */
@@ -26,27 +39,58 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
   const [showApiKey, setShowApiKey] = useState(false)
   /** 预设下拉 */
   const [showPresets, setShowPresets] = useState(false)
+  const hasResponseFormatWarning = !!aiTestResult?.available
+    && !!aiTestResult.responseFormat
+    && !isResponseFormatMatched(aiTestResult.protocol, aiTestResult.responseFormat)
+
+  useEffect(() => {
+    if (!settings.translationAIAssist) return
+    if (settings.aiConfig.baseUrl || settings.aiConfig.model) return
+
+    let cancelled = false
+    fetch('/api/ai-status')
+      .then((res) => res.json())
+      .then((envConfig: {
+        apiProtocol?: AppSettings['aiConfig']['apiProtocol']
+        baseUrl?: string
+        model?: string
+      }) => {
+        if (cancelled || (!envConfig.baseUrl && !envConfig.model)) return
+        setSetting('aiConfig', {
+          ...settings.aiConfig,
+          provider: 'custom',
+          presetName: settings.aiConfig.presetName || '自定义',
+          apiProtocol: envConfig.apiProtocol || settings.aiConfig.apiProtocol,
+          baseUrl: envConfig.baseUrl || settings.aiConfig.baseUrl,
+          model: envConfig.model || settings.aiConfig.model,
+        })
+      })
+      .catch(() => {
+        // 环境变量默认值读取失败时保持手动配置流程。
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [settings.aiConfig, settings.translationAIAssist, setSetting])
 
   /** 测试 AI 连接 */
   const handleTestAI = useCallback(async () => {
     setAiTestStatus('testing')
     setAiTestResult(null)
     try {
-      const isCustom = settings.aiConfig.provider === 'custom'
-      const res = isCustom
-        ? await fetch('/api/ai-status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ aiConfig: settings.aiConfig }),
-          })
-        : await fetch('/api/ai-status')
+      const res = await fetch('/api/ai-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aiConfig: settings.aiConfig }),
+      })
       const data = await res.json()
       setAiTestResult(data)
       setAiTestStatus(data.available ? 'success' : 'error')
     } catch {
       setAiTestResult({
         available: false,
-        model: settings.aiConfig.provider === 'custom' ? settings.aiConfig.model : 'GLM-4',
+        model: settings.aiConfig.model || '未配置',
         provider: settings.aiConfig.provider,
         message: '网络请求失败',
       })
@@ -54,9 +98,9 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
     }
   }, [settings.aiConfig])
 
-  /** 更新 AI 配置的便捷方法 */
-  const updateAiConfig = useCallback(<K extends keyof AppSettings['aiConfig']>(key: K, value: AppSettings['aiConfig'][K]) => {
-    setSetting('aiConfig', { ...settings.aiConfig, [key]: value })
+  /** 手动更新 AI 配置后标记为自定义 */
+  const updateCustomAiConfig = useCallback(<K extends keyof AppSettings['aiConfig']>(key: K, value: AppSettings['aiConfig'][K]) => {
+    setSetting('aiConfig', { ...settings.aiConfig, presetName: '自定义', [key]: value })
   }, [settings.aiConfig, setSetting])
 
   /** 选择预设 */
@@ -64,6 +108,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
     setSetting('aiConfig', {
       ...settings.aiConfig,
       provider: 'custom',
+      presetName: preset.name,
       apiProtocol: preset.apiProtocol,
       baseUrl: preset.baseUrl,
       model: preset.models[0],
@@ -126,151 +171,12 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
         className="overflow-hidden"
       >
         <div className="ml-0 pl-4 border-l-2 border-[#22c55e]/30 py-2 space-y-3">
-          {/* AI 提供商选择 */}
-          <div className="space-y-2">
-            <div className="text-xs font-medium text-[var(--app-text)] flex items-center gap-1.5">
-              <Server className="h-3.5 w-3.5 text-[#22c55e]" />
-              AI 提供商
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => {
-                  updateAiConfig('provider', 'builtin')
-                  setAiTestStatus('idle')
-                  setAiTestResult(null)
-                }}
-                className={cn(
-                  'rounded-lg border-2 p-2.5 text-center transition-all duration-200',
-                  settings.aiConfig.provider === 'builtin'
-                    ? 'border-[#22c55e] bg-[#22c55e]/5 shadow-sm'
-                    : 'border-[var(--app-border)] hover:border-[var(--app-text-secondary)]'
-                )}
-              >
-                <div className="flex items-center justify-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-[#22c55e]" />
-                  <span className="text-xs font-medium text-[var(--app-text)]">内置 AI</span>
-                </div>
-                <div className="text-[10px] text-[var(--app-text-secondary)] mt-1">
-                  GLM-4 · 无需配置
-                </div>
-              </button>
-              <button
-                onClick={() => {
-                  updateAiConfig('provider', 'custom')
-                  setAiTestStatus('idle')
-                  setAiTestResult(null)
-                }}
-                className={cn(
-                  'rounded-lg border-2 p-2.5 text-center transition-all duration-200',
-                  settings.aiConfig.provider === 'custom'
-                    ? 'border-[#22c55e] bg-[#22c55e]/5 shadow-sm'
-                    : 'border-[var(--app-border)] hover:border-[var(--app-text-secondary)]'
-                )}
-              >
-                <div className="flex items-center justify-center gap-1.5">
-                  <Key className="h-4 w-4 text-[#22c55e]" />
-                  <span className="text-xs font-medium text-[var(--app-text)]">自定义 API</span>
-                </div>
-                <div className="text-[10px] text-[var(--app-text-secondary)] mt-1">
-                  OpenAI / Anthropic 接口
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* 内置 AI 信息 */}
-          {settings.aiConfig.provider === 'builtin' && (
-            <motion.div
-              initial={{ opacity: 0, y: -5 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-secondary)] p-3 space-y-2"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center justify-center w-6 h-6 rounded-md bg-[#22c55e]/10">
-                    <Sparkles className="h-3.5 w-3.5 text-[#22c55e]" />
-                  </div>
-                  <span className="text-xs font-medium text-[var(--app-text)]">内置 AI 引擎</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {aiTestStatus === 'idle' && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse" />
-                      <span className="text-[10px] text-[#22c55e] font-medium">已就绪</span>
-                    </div>
-                  )}
-                  {aiTestStatus === 'testing' && (
-                    <div className="flex items-center gap-1.5">
-                      <Loader2 className="h-3 w-3 animate-spin text-[#22c55e]" />
-                      <span className="text-[10px] text-[#22c55e] font-medium">测试中...</span>
-                    </div>
-                  )}
-                  {aiTestStatus === 'success' && (
-                    <div className="flex items-center gap-1.5">
-                      <CheckCircle2 className="h-3 w-3 text-[#22c55e]" />
-                      <span className="text-[10px] text-[#22c55e] font-medium">已连接</span>
-                    </div>
-                  )}
-                  {aiTestStatus === 'error' && (
-                    <div className="flex items-center gap-1.5">
-                      <XCircle className="h-3 w-3 text-[#ef4444]" />
-                      <span className="text-[10px] text-[#ef4444] font-medium">连接失败</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-[var(--app-text-secondary)]">模型</span>
-                  <span className="text-[var(--app-text)] font-mono">GLM-4</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-[var(--app-text-secondary)]">服务</span>
-                  <span className="text-[var(--app-text)] font-mono">z-ai-web-dev-sdk</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-[var(--app-text-secondary)]">延迟</span>
-                  <span className="text-[var(--app-text)] font-mono">{aiTestResult?.latency || '—'}</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-[var(--app-text-secondary)]">配置</span>
-                  <span className="text-[#22c55e]">✓ 无需 API Key</span>
-                </div>
-              </div>
-              {/* 连接测试按钮 */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleTestAI}
-                disabled={aiTestStatus === 'testing'}
-                className={cn(
-                  'w-full gap-1.5 text-[10px] h-7 mt-1',
-                  aiTestStatus === 'success' && 'border-[#22c55e]/30 text-[#22c55e] hover:bg-[#22c55e]/10',
-                  aiTestStatus === 'error' && 'border-[#ef4444]/30 text-[#ef4444] hover:bg-[#ef4444]/10',
-                  aiTestStatus === 'idle' && 'border-[var(--app-border)] text-[var(--app-text-secondary)] hover:text-[var(--app-text)]',
-                  aiTestStatus === 'testing' && 'border-[var(--app-border)] text-[var(--app-text-secondary)]',
-                )}
-              >
-                {aiTestStatus === 'testing' ? (
-                  <><Loader2 className="h-3 w-3 animate-spin" /> 测试连接中...</>
-                ) : aiTestStatus === 'success' ? (
-                  <><CheckCircle2 className="h-3 w-3" /> 连接正常 - 再次测试</>
-                ) : aiTestStatus === 'error' ? (
-                  <><XCircle className="h-3 w-3" /> 重试连接</>
-                ) : (
-                  <><Sparkles className="h-3 w-3" /> 测试 AI 连接</>
-                )}
-              </Button>
-            </motion.div>
-          )}
-
           {/* 自定义 AI 配置 */}
-          {settings.aiConfig.provider === 'custom' && (
-            <motion.div
-              initial={{ opacity: 0, y: -5 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-3"
-            >
+          <motion.div
+            initial={{ opacity: 0, y: -5 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-3"
+          >
               {/* 快速预设 */}
               <div className="space-y-2">
                 <div className="text-xs font-medium text-[var(--app-text)] flex items-center gap-1.5">
@@ -286,7 +192,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                       'hover:border-[#22c55e]/50 focus:outline-none focus:border-[#22c55e]'
                     )}
                   >
-                    <span>选择 AI 服务商预设...</span>
+                    <span>{settings.aiConfig.presetName || '自定义'}</span>
                     <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showPresets && 'rotate-180')} />
                   </button>
                   {showPresets && (
@@ -299,7 +205,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                         >
                           <div className="text-xs font-medium text-[var(--app-text)]">{preset.name}</div>
                           <div className="text-[10px] text-[var(--app-text-secondary)] mt-0.5">
-                            {preset.models.slice(0, 3).join(' / ')}
+                            {preset.models.filter(Boolean).slice(0, 3).join(' / ') || '手动填写 Base URL、API Key 和模型'}
                           </div>
                         </button>
                       ))}
@@ -317,7 +223,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                 <div className="grid grid-cols-3 gap-1.5">
                   <button
                     onClick={() => {
-                      updateAiConfig('apiProtocol', 'openai-completions')
+                      updateCustomAiConfig('apiProtocol', 'openai-completions')
                       setAiTestStatus('idle')
                       setAiTestResult(null)
                     }}
@@ -335,7 +241,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                   </button>
                   <button
                     onClick={() => {
-                      updateAiConfig('apiProtocol', 'openai-responses')
+                      updateCustomAiConfig('apiProtocol', 'openai-responses')
                       setAiTestStatus('idle')
                       setAiTestResult(null)
                     }}
@@ -353,7 +259,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                   </button>
                   <button
                     onClick={() => {
-                      updateAiConfig('apiProtocol', 'anthropic-messages')
+                      updateCustomAiConfig('apiProtocol', 'anthropic-messages')
                       setAiTestStatus('idle')
                       setAiTestResult(null)
                     }}
@@ -384,7 +290,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                 <Input
                   value={settings.aiConfig.baseUrl}
                   onChange={(e) => {
-                    updateAiConfig('baseUrl', e.target.value)
+                    updateCustomAiConfig('baseUrl', e.target.value)
                     setAiTestStatus('idle')
                     setAiTestResult(null)
                   }}
@@ -428,7 +334,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                   <Input
                     value={settings.aiConfig.apiKey}
                     onChange={(e) => {
-                      updateAiConfig('apiKey', e.target.value)
+                      updateCustomAiConfig('apiKey', e.target.value)
                       setAiTestStatus('idle')
                       setAiTestResult(null)
                     }}
@@ -445,7 +351,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                   </button>
                 </div>
                 <p className="text-[10px] text-[var(--app-text-secondary)]">
-                  你的 API Key 仅存储在浏览器本地，不会上传到服务器数据库
+                  留空时优先使用服务端环境变量中的 API Key；手动填写的 Key 仅存储在浏览器本地，不会上传到服务器数据库
                 </p>
               </div>
 
@@ -458,7 +364,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                 <Input
                   value={settings.aiConfig.model}
                   onChange={(e) => {
-                    updateAiConfig('model', e.target.value)
+                    updateCustomAiConfig('model', e.target.value)
                     setAiTestStatus('idle')
                     setAiTestResult(null)
                   }}
@@ -516,12 +422,12 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                         <span className="text-[var(--app-text-secondary)]">响应格式</span>
                         <span className={cn(
                           'font-mono',
-                          aiTestResult.responseFormat !== aiTestResult.protocol && aiTestResult.available
+                          hasResponseFormatWarning
                             ? 'text-amber-400'
                             : 'text-[var(--app-text)]'
                         )}>
                           {aiTestResult.responseFormat}
-                          {aiTestResult.responseFormat !== aiTestResult.protocol && aiTestResult.available && ' ⚠️'}
+                          {hasResponseFormatWarning && ' ⚠️'}
                         </span>
                       </div>
                     )}
@@ -543,7 +449,7 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                   variant="outline"
                   size="sm"
                   onClick={handleTestAI}
-                  disabled={aiTestStatus === 'testing' || !settings.aiConfig.baseUrl || !settings.aiConfig.apiKey}
+                  disabled={aiTestStatus === 'testing'}
                   className={cn(
                     'w-full gap-1.5 text-[10px] h-7',
                     aiTestStatus === 'success' && 'border-[#22c55e]/30 text-[#22c55e] hover:bg-[#22c55e]/10',
@@ -564,14 +470,13 @@ export function TranslationSettingsTab({ settings, setSetting }: TranslationSett
                 {aiTestResult && aiTestStatus === 'error' && (
                   <p className="text-[9px] text-[#ef4444] mt-1 break-all">{aiTestResult.message}</p>
                 )}
-                {aiTestResult && aiTestStatus === 'success' && aiTestResult.responseFormat && aiTestResult.protocol && aiTestResult.responseFormat !== 'OpenAI Chat' && aiTestResult.responseFormat !== 'Anthropic' && aiTestResult.responseFormat !== 'OpenAI Responses' && (
+                {aiTestResult && aiTestStatus === 'success' && hasResponseFormatWarning && (
                   <p className="text-[9px] text-amber-400 mt-1 break-all">
                     响应格式 ({aiTestResult.responseFormat}) 与所选协议 ({aiTestResult.protocol}) 不匹配，但已自动兼容。你的 API 中转服务统一了响应格式。
                   </p>
                 )}
               </div>
-            </motion.div>
-          )}
+          </motion.div>
 
           {/* AI 功能说明 */}
           <div className="space-y-1.5">

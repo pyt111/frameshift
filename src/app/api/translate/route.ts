@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { translate } from '@/lib/translator/engine';
-import { getEnvAIConfig, isBuiltinAvailable } from '@/lib/ai/types';
+import { getResolvedAIConfigMissing, resolveAIConfig } from '@/lib/ai/types';
 import type { Framework, TranslationRequest, TranslationAIConfig } from '@/lib/semantic-tree/types';
 
 export async function POST(request: NextRequest) {
@@ -42,29 +42,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 校验自定义 AI 配置
-    if (enableAI && aiConfig?.provider === 'custom') {
-      if (!aiConfig.baseUrl || !aiConfig.apiKey || !aiConfig.model) {
+    let resolvedAiConfig: TranslationAIConfig | undefined;
+
+    // 校验自定义 AI 配置，缺失字段允许从服务端环境变量补齐
+    if (enableAI) {
+      const resolved = resolveAIConfig(aiConfig);
+      if (!resolved) {
+        const missing = getResolvedAIConfigMissing(aiConfig);
         return NextResponse.json(
-          { error: '自定义 AI 配置不完整，需要提供 baseUrl、apiKey 和 model' },
+          { error: `AI 配置不完整，缺少: ${missing.join(', ')}。请在 .env.local 中配置，或在前端设置中填写自定义 API` },
           { status: 400 }
         );
       }
-      const protocol = aiConfig.apiProtocol || 'openai-completions';
-      console.log(`[FrameShift API] 翻译请求使用自定义 AI: ${aiConfig.model} @ ${aiConfig.baseUrl} (${protocol} 协议)`);
-    } else if (enableAI) {
-      // 检查环境变量配置或内置 AI
-      const envConfig = getEnvAIConfig();
-      if (envConfig) {
-        console.log(`[FrameShift API] 翻译请求使用环境变量 AI: ${envConfig.model} @ ${envConfig.baseUrl} (${envConfig.apiProtocol} 协议)`);
-      } else if (isBuiltinAvailable()) {
-        console.log(`[FrameShift API] 翻译请求使用内置 AI: GLM-4`);
-      } else {
-        return NextResponse.json(
-          { error: 'AI 不可用：内置 AI 仅在沙箱环境可用，请在 .env 中配置 AI_PROVIDER=env 及相关变量，或在前端设置中配置自定义 API' },
-          { status: 400 }
-        );
-      }
+      resolvedAiConfig = resolved;
+      const protocol = resolved.apiProtocol || 'openai-completions';
+      console.log(`[FrameShift API] 翻译请求使用自定义 AI: ${resolved.model} @ ${resolved.baseUrl} (${protocol} 协议)`);
     } else {
       console.log(`[FrameShift API] 翻译请求: AST 模式（无 AI）`);
     }
@@ -75,13 +67,7 @@ export async function POST(request: NextRequest) {
       sourceFramework,
       targetFramework,
       enableAI: enableAI ?? false,
-      aiConfig: aiConfig ? {
-        provider: aiConfig.provider,
-        apiProtocol: aiConfig.apiProtocol,
-        baseUrl: aiConfig.baseUrl,
-        apiKey: aiConfig.apiKey,
-        model: aiConfig.model,
-      } : undefined,
+      aiConfig: resolvedAiConfig,
     });
 
     return NextResponse.json(result);

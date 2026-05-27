@@ -15,7 +15,7 @@
 
 import { NextRequest } from 'next/server';
 import { streamAiTranslation, buildApiUrl, normalizeProtocol } from '@/lib/ai';
-import { getEnvAIConfig, isBuiltinAvailable } from '@/lib/ai/types';
+import { resolveAIConfig } from '@/lib/ai/types';
 import { translate } from '@/lib/translator/engine';
 import type { Framework, TranslationAIConfig } from '@/lib/semantic-tree/types';
 
@@ -59,16 +59,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 如果不是自定义 AI，检查环境变量配置，否则回退到普通翻译
-    const envConfig = getEnvAIConfig();
-    const effectiveAiConfig = (aiConfig?.provider === 'custom' && aiConfig.baseUrl && aiConfig.apiKey && aiConfig.model)
-      ? aiConfig
-      : envConfig
-        ? { provider: 'custom' as const, apiProtocol: envConfig.apiProtocol, baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model: envConfig.model }
-        : aiConfig;
+    // 前端自定义配置缺失的字段可由服务端环境变量补齐
+    const effectiveAiConfig = resolveAIConfig(aiConfig);
 
-    if (!enableAI || !effectiveAiConfig || effectiveAiConfig.provider !== 'custom' || !effectiveAiConfig.baseUrl || !effectiveAiConfig.apiKey || !effectiveAiConfig.model) {
-      console.log('[FrameShift Stream API] 非自定义 AI，回退到同步翻译');
+    if (!enableAI || !effectiveAiConfig || !effectiveAiConfig.baseUrl || !effectiveAiConfig.apiKey || !effectiveAiConfig.model) {
+      console.log('[FrameShift Stream API] AI 配置不完整，回退到同步翻译');
       const result = await translate({
         sourceCode,
         sourceFramework,
@@ -171,12 +166,22 @@ export async function POST(request: NextRequest) {
             // 发送完成事件（含最终提取的代码）
             if (!closed) {
               const duration = Date.now() - startTime;
-              sendEvent('done', {
-                success: result.success,
-                code: result.code,
-                tokenCount,
-                duration,
-              });
+              if (result.success && result.code) {
+                sendEvent('done', {
+                  success: true,
+                  code: result.code,
+                  tokenCount,
+                  duration,
+                });
+              } else {
+                sendEvent('error', {
+                  message: tokenCount > 0
+                    ? 'AI 翻译未能提取有效代码，请重试'
+                    : 'AI 翻译超时，未返回任何内容，请稍后重试或切换模型',
+                  tokenCount,
+                  duration,
+                });
+              }
               console.log(`[FrameShift Stream API] 流式翻译完成: ${tokenCount} tokens, ${duration}ms, success=${result.success}`);
             }
           } catch (error) {

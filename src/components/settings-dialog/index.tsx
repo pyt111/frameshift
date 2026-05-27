@@ -28,10 +28,8 @@ export function SettingsDialog({
   resetSettings,
 }: SettingsDialogProps) {
   /** 当前 AI 提供商标签 */
-  const currentProviderLabel = settings.aiConfig.provider === 'builtin' ? '内置 AI' : '自定义 AI'
-  const currentModelLabel = settings.aiConfig.provider === 'builtin'
-    ? 'GLM-4'
-    : (settings.aiConfig.model || '未配置')
+  const currentProviderLabel = '自定义 API'
+  const currentModelLabel = settings.aiConfig.model || '未配置'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -136,9 +136,7 @@ export function TranslationWorkspace({
 
   /** 是否使用流式翻译（仅自定义 AI 时启用） */
   const shouldUseStreaming = settings.translationAIAssist
-    && settings.aiConfig.provider === 'custom'
     && !!settings.aiConfig.baseUrl
-    && !!settings.aiConfig.apiKey
     && !!settings.aiConfig.model
 
   /** 流式请求的 AbortController 引用 */
@@ -170,15 +168,13 @@ export function TranslationWorkspace({
 
       // 调试日志：显示翻译请求的 AI 配置
       if (settings.translationAIAssist) {
-        const aiProvider = settings.aiConfig.provider === 'custom' ? `自定义AI (${settings.aiConfig.model})` : '内置 GLM-4'
-        console.log(`[FrameShift] 翻译请求使用 AI: ${aiProvider}`, settings.aiConfig.provider === 'custom' ? `baseUrl: ${settings.aiConfig.baseUrl}` : '')
+        const aiProvider = settings.aiConfig.model ? `自定义AI (${settings.aiConfig.model})` : '自定义AI'
+        console.log(`[FrameShift] 翻译请求使用 AI: ${aiProvider}`, settings.aiConfig.baseUrl ? `baseUrl: ${settings.aiConfig.baseUrl}` : '')
       }
 
       // 判断是否使用流式翻译
       const useStream = settings.translationAIAssist
-        && settings.aiConfig.provider === 'custom'
         && !!settings.aiConfig.baseUrl
-        && !!settings.aiConfig.apiKey
         && !!settings.aiConfig.model
 
       if (useStream) {
@@ -275,6 +271,14 @@ export function TranslationWorkspace({
                     const streamDuration = Date.now() - streamStartTime
                     // 优先使用后端已提取的代码，回退到前端提取
                     const finalCode = parsed.code || extractCodeBlockFromStream(accumulated, toLang)
+
+                    if (!parsed.success || !finalCode) {
+                      throw new Error(
+                        tokenCount > 0
+                          ? 'AI 翻译未能提取有效代码，请重试'
+                          : 'AI 翻译超时，未返回任何内容，请稍后重试或切换模型'
+                      )
+                    }
 
                     // 只在 finalCode 与当前展示不同时才更新（避免双重刷新）
                     if (finalCode !== displayCode) {
@@ -453,10 +457,10 @@ export function TranslationWorkspace({
           })
         }
       } else {
-        // ===== 服务端翻译（内置 AI 或 Vue 3 AST 模式） =====
+        // ===== 服务端翻译（自定义 AI 或 Vue 3 AST 模式） =====
         // Vue 3 源代码需要 @vue/compiler-sfc（Node.js only），走服务端 API
-        // 内置 AI (GLM-4) 需要 z-ai-web-dev-sdk（server-only），也走服务端
-        console.log('[FrameShift] 使用服务端翻译', settings.translationAIAssist ? '(内置 AI)' : '(Vue 3 AST 回退)')
+        // 自定义 AI 缺失字段可由服务端环境变量补齐，也走服务端 API
+        console.log('[FrameShift] 使用服务端翻译', settings.translationAIAssist ? '(自定义 AI)' : '(Vue 3 AST 回退)')
         const response = await fetch('/api/translate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -828,14 +832,14 @@ export function TranslationWorkspace({
                       )} />
                       <span className={cn(
                         'font-medium',
-                        settings.aiConfig.provider === 'custom' ? 'text-[#f59e0b]' : 'text-[#22c55e]'
+                        'text-[#f59e0b]'
                       )}>
-                        {settings.aiConfig.provider === 'custom' ? `自定义AI` : 'GLM-4'}
+                        自定义AI
                       </span>
-                      {settings.aiConfig.provider === 'custom' && settings.aiConfig.model && (
+                      {settings.aiConfig.model && (
                         <span className="text-[var(--app-text-secondary)] font-mono">({settings.aiConfig.model})</span>
                       )}
-                      {settings.aiConfig.provider === 'custom' && settings.aiConfig.apiProtocol === 'anthropic-messages' && (
+                      {settings.aiConfig.apiProtocol === 'anthropic-messages' && (
                         <span className="text-[10px] px-1 py-0 rounded bg-[#a855f7]/10 text-[#a855f7] border border-[#a855f7]/20">Anthropic</span>
                       )}
                       {isStreaming && (
@@ -846,9 +850,7 @@ export function TranslationWorkspace({
                   <TooltipContent side="bottom" className="bg-[var(--app-hover-bg)] text-[var(--app-text)] border-[var(--app-border)]">
                     {isStreaming
                       ? `流式翻译中... (${settings.aiConfig.apiProtocol || 'openai-completions'} 协议)`
-                      : settings.aiConfig.provider === 'custom'
-                        ? `自定义 AI: ${settings.aiConfig.baseUrl} / ${settings.aiConfig.model} (${settings.aiConfig.apiProtocol || 'openai-completions'} 协议)`
-                        : '内置 AI: GLM-4 (z-ai-web-dev-sdk)'}
+                      : `自定义 AI: ${settings.aiConfig.baseUrl || '使用环境变量 Base URL'} / ${settings.aiConfig.model || '使用环境变量模型'} (${settings.aiConfig.apiProtocol || 'openai-completions'} 协议)`}
                   </TooltipContent>
                 </Tooltip>
               )}
@@ -1174,7 +1176,7 @@ export function TranslationWorkspace({
                         )}>
                           <Sparkles className="h-2.5 w-2.5" />
                           {result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ai-full'
-                            ? `${settings.aiConfig.provider === 'custom' ? (settings.aiConfig.model || '自定义AI') : 'GLM-4'} 翻译`
+                            ? `${settings.aiConfig.model || '自定义AI'} 翻译`
                             : result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ast-fallback'
                               ? 'AI 失败·已回退'
                               : 'AI 翻译'}
@@ -1182,7 +1184,7 @@ export function TranslationWorkspace({
                       </TooltipTrigger>
                       <TooltipContent side="bottom" className="bg-[var(--app-hover-bg)] text-[var(--app-text)] border-[var(--app-border)] max-w-72">
                         {result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ai-full'
-                          ? `已使用 ${settings.aiConfig.provider === 'custom' ? (settings.aiConfig.model || '自定义AI') : 'GLM-4'} 进行全量翻译，翻译质量较高`
+                          ? `已使用 ${settings.aiConfig.model || '自定义AI'} 进行全量翻译，翻译质量较高`
                           : result?.pipeline?.steps?.find(s => s.id === 'generate')?.detail?.mode === 'ast-fallback'
                             ? 'AI 翻译失败，已自动回退到 AST 管线翻译。部分代码可能缺失，建议检查 API 配置或重试'
                             : '翻译模式信息'}
@@ -1283,7 +1285,7 @@ export function TranslationWorkspace({
                               const isAI = mode === 'ai-full'
                               const isFallback = mode === 'ast-fallback'
                               const aiUnitCount = (genStep?.detail?.aiUnitCount as number) ?? 0
-                              const model = settings.aiConfig.provider === 'custom' ? (settings.aiConfig.model || '自定义AI') : 'GLM-4'
+                              const model = settings.aiConfig.model || '自定义AI'
                               return (
                                 <motion.div
                                   initial={{ opacity: 0, scale: 0.9 }}
@@ -1352,7 +1354,7 @@ export function TranslationWorkspace({
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="bg-[var(--app-hover-bg)] text-[var(--app-text)] border-[var(--app-border)]">
                               {settings.translationAIAssist
-                                ? `AI 辅助翻译已启用 · ${settings.aiConfig.provider === 'custom' ? (settings.aiConfig.model || '自定义') : 'GLM-4'} 模型 · 自动优化低置信度翻译`
+                                ? `AI 辅助翻译已启用 · ${settings.aiConfig.model || '自定义'} · 自动优化低置信度翻译`
                                 : 'AI 辅助翻译已关闭 · 在设置中开启可获得更高质量的翻译'}
                             </TooltipContent>
                           </Tooltip>

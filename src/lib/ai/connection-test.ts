@@ -3,9 +3,8 @@
  * 返回连接状态和模型信息
  */
 
-import ZAI from 'z-ai-web-dev-sdk';
 import type { AIApiProtocol, AICustomConfig } from './types';
-import { getEnvAIConfig, isBuiltinAvailable } from './types';
+import { getEnvAIConfigStatus, resolveAIConfig } from './types';
 import { normalizeProtocol, buildApiUrl, extractContentFromAnyFormat, extractTokenFromSSEEvent, isSSEStreamEndEvent, isSSEErrorEvent } from './protocol';
 
 /**
@@ -25,9 +24,11 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
   /** 响应格式（JSON/SSE/HTML） */
   responseFormat?: string;
 }> {
-  // 测试自定义 AI 连接
-  if (aiConfig && aiConfig.provider === 'custom' && aiConfig.baseUrl && aiConfig.apiKey) {
-    const protocol = normalizeProtocol(aiConfig.apiProtocol);
+  const effectiveConfig = resolveAIConfig(aiConfig);
+
+  // 测试 AI 连接。前端自定义配置缺失的字段可由服务端环境变量补齐。
+  if (effectiveConfig && effectiveConfig.baseUrl && effectiveConfig.apiKey) {
+    const protocol = normalizeProtocol(effectiveConfig.apiProtocol);
     const startTime = Date.now();
     try {
       const controller = new AbortController();
@@ -35,7 +36,7 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
 
       let response: Response;
 
-      const actualApiUrl = buildApiUrl(aiConfig.baseUrl, protocol as AIApiProtocol);
+      const actualApiUrl = buildApiUrl(effectiveConfig.baseUrl, protocol as AIApiProtocol);
       console.log(`[AI Status Test] Protocol: ${protocol}, Actual URL: ${actualApiUrl}`);
 
       if (protocol === 'anthropic-messages') {
@@ -44,12 +45,12 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': aiConfig.apiKey,
+            'x-api-key': effectiveConfig.apiKey,
             'anthropic-version': '2023-06-01',
             'anthropic-dangerous-direct-browser-access': 'true',
           },
           body: JSON.stringify({
-            model: aiConfig.model || 'claude-3-5-sonnet-20241022',
+            model: effectiveConfig.model || 'claude-3-5-sonnet-20241022',
             max_tokens: 20,
             messages: [
               { role: 'user', content: '测试连接' },
@@ -64,10 +65,10 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${aiConfig.apiKey}`,
+            'Authorization': `Bearer ${effectiveConfig.apiKey}`,
           },
           body: JSON.stringify({
-            model: aiConfig.model || 'gpt-4o',
+            model: effectiveConfig.model || 'gpt-4o',
             input: [
               { role: 'user', content: '测试连接' },
             ],
@@ -82,10 +83,10 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${aiConfig.apiKey}`,
+            'Authorization': `Bearer ${effectiveConfig.apiKey}`,
           },
           body: JSON.stringify({
-            model: aiConfig.model || 'gpt-4o',
+            model: effectiveConfig.model || 'gpt-4o',
             messages: [
               { role: 'system', content: '你是一个测试助手，请回复"连接成功"。' },
               { role: 'user', content: '测试连接' },
@@ -109,8 +110,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
         if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
           return {
             available: false,
-            model: aiConfig.model || 'unknown',
-            provider: 'custom',
+            model: effectiveConfig.model || 'unknown',
+            provider: effectiveConfig.provider,
             requestUrl: actualApiUrl,
             protocol,
             message: `API 地址返回了网页而非 JSON，请检查 Base URL 和 API 协议。实际请求: ${actualApiUrl} (${protocol})`,
@@ -118,8 +119,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
         }
         return {
           available: false,
-          model: aiConfig.model || 'unknown',
-          provider: 'custom',
+          model: effectiveConfig.model || 'unknown',
+          provider: effectiveConfig.provider,
           requestUrl: actualApiUrl,
           protocol,
           message: `API 返回错误 (${response.status}): ${responseText.slice(0, 200)}`,
@@ -130,8 +131,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
       if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
         return {
           available: false,
-          model: aiConfig.model || 'unknown',
-          provider: 'custom',
+          model: effectiveConfig.model || 'unknown',
+          provider: effectiveConfig.provider,
           requestUrl: actualApiUrl,
           protocol,
           message: `API 地址返回了网页而非 JSON，请检查 Base URL 和 API 协议。实际请求: ${actualApiUrl} (${protocol})`,
@@ -194,8 +195,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
 
         return {
           available: !!content,
-          model: aiConfig.model || 'unknown',
-          provider: `custom (${protocol})`,
+          model: effectiveConfig.model || 'unknown',
+          provider: `${effectiveConfig.provider} (${protocol})`,
           latency: `${latency}ms`,
           requestUrl: actualApiUrl,
           protocol,
@@ -209,8 +210,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
       } catch {
         return {
           available: false,
-          model: aiConfig.model || 'unknown',
-          provider: 'custom',
+          model: effectiveConfig.model || 'unknown',
+          provider: effectiveConfig.provider,
           requestUrl: actualApiUrl,
           protocol,
           message: `API 返回了非 JSON 响应。实际请求: ${actualApiUrl}，协议: ${protocol}。如果 API 使用不同协议，请在设置中切换 API 协议`,
@@ -228,8 +229,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
 
       return {
         available: !!content,
-        model: aiConfig.model || data.model || 'unknown',
-        provider: `custom (${protocol})`,
+        model: effectiveConfig.model || data.model || 'unknown',
+        provider: `${effectiveConfig.provider} (${protocol})`,
         latency: `${latency}ms`,
         requestUrl: actualApiUrl,
         protocol,
@@ -238,7 +239,7 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
       };
     } catch (error) {
       let errorMsg = error instanceof Error ? error.message : String(error);
-      const actualApiUrl = buildApiUrl(aiConfig.baseUrl, protocol as AIApiProtocol);
+      const actualApiUrl = buildApiUrl(effectiveConfig.baseUrl, protocol as AIApiProtocol);
       
       if (errorMsg.includes('is not valid JSON') || errorMsg.includes('Unexpected token')) {
         errorMsg = `API 返回了非 JSON 响应。实际请求: ${actualApiUrl}，协议: ${protocol}。如果 API 使用不同协议，请在设置中切换 API 协议`;
@@ -246,8 +247,8 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
       
       return {
         available: false,
-        model: aiConfig.model || 'unknown',
-        provider: 'custom',
+        model: effectiveConfig.model || 'unknown',
+        provider: effectiveConfig.provider,
         requestUrl: actualApiUrl,
         protocol,
         message: `连接失败: ${errorMsg}`,
@@ -255,57 +256,11 @@ export async function testAIConnection(aiConfig?: AICustomConfig): Promise<{
     }
   }
 
-  // 测试内置 SDK 连接
-  // 优先检查环境变量配置
-  const envConfig = getEnvAIConfig();
-  if (envConfig) {
-    console.log('[AI Status Test] 使用环境变量配置测试连接');
-    // 使用环境变量配置进行测试（复用自定义逻辑）
-    const testResult = await testAIConnection(envConfig);
-    return {
-      ...testResult,
-      provider: 'env',
-      message: testResult.available
-        ? `环境变量 AI 连接正常 (${envConfig.apiProtocol || 'openai-completions'}, 模型: ${envConfig.model})`
-        : `环境变量 AI 连接失败: ${testResult.message}`,
-    };
-  }
-
-  if (!isBuiltinAvailable()) {
-    return {
-      available: false,
-      model: 'GLM-4',
-      provider: 'builtin',
-      message: '内置 AI 不可用（非沙箱环境）。请在 .env 中配置 AI_PROVIDER=env 及相关变量，或在前端设置中配置自定义 API',
-    };
-  }
-
-  try {
-    const startTime = Date.now();
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: '你是一个测试助手，请回复"连接成功"。' },
-        { role: 'user', content: '测试连接' },
-      ],
-      thinking: { type: 'disabled' },
-    });
-    const latency = Date.now() - startTime;
-    const response = completion.choices[0]?.message?.content;
-
-    return {
-      available: !!response,
-      model: 'GLM-4',
-      provider: 'builtin',
-      latency: `${latency}ms`,
-      message: response ? '内置 AI 服务连接正常' : 'AI 服务返回空响应',
-    };
-  } catch (error) {
-    return {
-      available: false,
-      model: 'GLM-4',
-      provider: 'builtin',
-      message: `内置 AI 服务连接失败: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
+  const status = getEnvAIConfigStatus();
+  return {
+    available: false,
+    model: process.env.AI_MODEL || '未配置',
+    provider: 'custom',
+    message: `AI 配置不完整，缺少: ${status.missing.join(', ')}。请在 .env.local 中配置，或在前端设置中填写自定义 API`,
+  };
 }

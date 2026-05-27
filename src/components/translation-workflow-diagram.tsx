@@ -201,7 +201,7 @@ const WORKFLOW_NODES: WorkflowNode[] = [
     type: 'decision',
     title: 'AI 辅助是否启用？',
     description: '用户设置中是否开启了 AI 辅助翻译',
-    detail: 'AI 辅助使用 GLM-4 模型，通过 z-ai-web-dev-sdk 调用，优化低置信度翻译点',
+    detail: 'AI 辅助使用自定义 API，配置可默认读取服务端环境变量',
     color: '#f59e0b',
   },
   {
