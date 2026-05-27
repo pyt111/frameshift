@@ -23,6 +23,15 @@ import {
 } from './protocol';
 import { extractCodeBlock } from './code-extraction';
 
+/** 读取正整数环境变量 */
+function getPositiveIntegerEnv(name: string): number | null {
+  const value = process.env[name];
+  if (!value) return null;
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 /**
  * 流式 AI 翻译
  * 支持 OpenAI Chat Completions、Anthropic 和 OpenAI Responses 三种协议的流式传输
@@ -72,17 +81,27 @@ ${sourceCode}
 
   // 根据源代码长度自适应超时：基础 60s + 每百行 30s，最长 5 分钟
   const lineCount = sourceCode.split('\n').length;
-  const timeoutMs = Math.min(60000 + Math.ceil(lineCount / 100) * 30000, 300000);
-  console.log(`[Stream AI] Protocol: ${protocol}, Source: ${lineCount} lines, timeout: ${timeoutMs / 1000}s`);
+  const defaultTotalTimeoutMs = Math.min(60000 + Math.ceil(lineCount / 100) * 30000, 300000);
+  const connectTimeoutMs = getPositiveIntegerEnv('AI_STREAM_CONNECT_TIMEOUT_MS')
+    ?? getPositiveIntegerEnv('AI_STREAM_TIMEOUT_MS')
+    ?? defaultTotalTimeoutMs;
+  const totalTimeoutMs = getPositiveIntegerEnv('AI_STREAM_TOTAL_TIMEOUT_MS') ?? defaultTotalTimeoutMs;
+  const inactivityTimeoutMs = getPositiveIntegerEnv('AI_STREAM_INACTIVITY_TIMEOUT_MS') ?? 60000;
+  console.log(`[Stream AI] Protocol: ${protocol}, Source: ${lineCount} lines, connect timeout: ${connectTimeoutMs / 1000}s, total timeout: ${totalTimeoutMs / 1000}s, inactivity: ${inactivityTimeoutMs / 1000}s`);
 
   const abortController = new AbortController();
 
-  // 超时定时器：覆盖整个流式过程
-  // 每收到一个 chunk 就重置定时器（证明 AI 仍在生成）
+  // 连接超时：AI 服务迟迟不返回响应时中止请求。
   let timeoutId = setTimeout(() => {
-    console.warn(`[Stream AI] Total timeout (${timeoutMs / 1000}s) reached, aborting`);
+    console.warn(`[Stream AI] Connect timeout (${connectTimeoutMs / 1000}s) reached, aborting`);
     abortController.abort();
-  }, timeoutMs);
+  }, connectTimeoutMs);
+
+  // 总超时：无论中间是否持续收到 SSE 事件，整体耗时超过上限都中止请求。
+  const totalTimeoutId = setTimeout(() => {
+    console.warn(`[Stream AI] Total timeout (${totalTimeoutMs / 1000}s) reached, aborting`);
+    abortController.abort();
+  }, totalTimeoutMs);
 
   /** 重置超时定时器（每次收到数据时调用） */
   const resetTimeout = () => {
@@ -90,7 +109,7 @@ ${sourceCode}
     timeoutId = setTimeout(() => {
       console.warn(`[Stream AI] Inactivity timeout, aborting`);
       abortController.abort();
-    }, 60000); // 60s 无数据则超时
+    }, inactivityTimeoutMs); // 无数据超时
   };
 
   let accumulated = ''; // 在 try 外声明，以便 catch 中可以访问
@@ -354,6 +373,7 @@ ${sourceCode}
     return { code: finalCode, success: !!finalCode };
   } catch (error) {
     clearTimeout(timeoutId);
+    clearTimeout(totalTimeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
       console.error('[Stream AI] Translation timeout or aborted');
       // 尝试用已累积的内容生成结果
@@ -371,5 +391,6 @@ ${sourceCode}
     }
   } finally {
     clearTimeout(timeoutId);
+    clearTimeout(totalTimeoutId);
   }
 }
