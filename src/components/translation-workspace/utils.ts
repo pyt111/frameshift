@@ -1,4 +1,9 @@
 import type { Framework } from '@/lib/semantic-tree/types'
+import {
+  DEFAULT_ANGULAR_CODE,
+  DEFAULT_REACT_CODE,
+  DEFAULT_VUE_CODE,
+} from './constants'
 
 /** 格式化文件大小 */
 export function formatFileSize(bytes: number): string {
@@ -20,6 +25,44 @@ export function getDirectionIndicator(source: Framework, target: Framework): { f
     from: frameworkIcon(source),
     to: frameworkIcon(target),
   }
+}
+
+/** 获取框架默认代码 */
+export function getDefaultCode(fw: Framework): string {
+  switch (fw) {
+    case 'react': return DEFAULT_REACT_CODE
+    case 'vue3': return DEFAULT_VUE_CODE
+    case 'angular': return DEFAULT_ANGULAR_CODE
+    default: return DEFAULT_REACT_CODE
+  }
+}
+
+/** 获取与当前框架不同的默认目标框架 */
+export function getAlternativeFramework(fw: Framework): Framework {
+  if (fw === 'react') return 'vue3'
+  if (fw === 'vue3') return 'react'
+  return 'react'
+}
+
+/** 获取框架展示名称 */
+export function getFrameworkLabel(framework: Framework): string {
+  if (framework === 'react') return 'React'
+  if (framework === 'angular') return 'Angular'
+  return 'Vue 3'
+}
+
+/** 获取框架品牌色 */
+export function getFrameworkColor(framework: Framework): string {
+  if (framework === 'react') return '#61dafb'
+  if (framework === 'angular') return '#dd0031'
+  return '#42b883'
+}
+
+/** 获取框架徽章样式 */
+export function getFrameworkBadgeClass(framework: Framework): string {
+  if (framework === 'react') return 'bg-[#61dafb]/10 text-[#61dafb] border-[#61dafb]/20'
+  if (framework === 'angular') return 'bg-[#dd0031]/10 text-[#dd0031] border-[#dd0031]/20'
+  return 'bg-[#42b883]/10 text-[#42b883] border-[#42b883]/20'
 }
 
 /** 统计源代码中的翻译单元数量（组件、指令、函数等） */
